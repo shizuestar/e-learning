@@ -58,17 +58,21 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('courses/getDataCreate/{course:slug}', [AssignmentController::class, 'getDataCreate']);
     Route::post('courses/{course:slug}/createAssignment', [AssignmentController::class, 'addQuestionsBatch']);
 
+    Route::get('/assignment/{assignment:slug}/viewAnswers', [AssignmentController::class, 'viewAnswers']);
+    Route::get('/assignment/{assignment:slug}/viewStudentAnswer/{nis}', [AssignmentController::class, 'viewStudentAnswers']);
+    Route::put('/assignment/{assignment:slug}/response/{answer}', [AssignmentController::class, 'gradeAssignment']);
+
     // Student routes
     Route::get('/courses/assignment/{slug}', [AssignmentController::class, 'showQuestions']);
     Route::post('/assignment/{assignment:slug}/submitAssignment', [AssignmentController::class, 'submitAssignment']);
+    Route::get('/assignment/{assignment:slug}/viewSubmited', [AssignmentController::class, 'viewSubmited']);
 
     // Assignment routes
     Route::get('/user/class', [SchoolClassController::class, 'getClasses']); // Get all classes for the user
     Route::get('/courses/{course:slug}/assignments', [AssignmentController::class, 'getAssignmentsByCourse']);
-    
+
     Route::get('/student/courses', [CourseController::class, 'getAllCourseStudent']);
     Route::get('/assignment/{assignment:slug}/result', [AssignmentController::class, 'viewUserResult']);
-    Route::get('/courses/{course:slug}/assignments/{student}', [AssignmentController::class, 'getStudentAssignments']);
-
-    Route::put('/assignment/{assignment:slug}/response/{answer}', [AssignmentController::class, 'gradeAssignment']);
+    Route::get('/getAssignments', [AssignmentController::class, 'getUserAssignments']);
+    // Route::get('/courses/{course:slug}/assignments/{student}', [AssignmentController::class, 'getStudentAssignments']);
 });

@@ -9,7 +9,7 @@ class SchoolClassStudent extends Model
 {
     use HasFactory;
 
-    protected $table = 'school_class_student'; // nama tabel pivot
+    protected $table = 'school_class_students'; // nama tabel pivot
 
     protected $fillable = [
         'school_class_id',

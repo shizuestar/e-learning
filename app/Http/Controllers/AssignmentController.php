@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use Exception;
+use Carbon\Carbon;
 use App\Models\Answer;
 use App\Models\Course;
 use App\Models\Option;
@@ -18,35 +19,101 @@ use Illuminate\Support\Facades\Auth;
 
 class AssignmentController extends Controller
 {
-    public function getStudentAssignments(Course $course)
+    public function getUserAssignments()
     {
-        $student = Student::where('user_id', Auth::id())->first();
-        if (!$student) {
-            return response()->json(['error' => 'User tidak ditemukan sebagai student.'], 403);
-        }
+        $user = Auth::user();
 
-        $assignments = Assignment::where('course_id', $course->id)
-            ->with(['results' => function ($query) use ($student) {
-                $query->where('student_id', $student->id);
-            }])
-            ->get();
+        if ($user->role === 'student') {
+            $student = Student::where('user_id', $user->id)->first();
+            if (!$student) {
+                return response()->json(['error' => 'User tidak ditemukan sebagai student.'], 403);
+            }
 
-        return response()->json([
-            'assignments' => $assignments->map(function ($assignment) {
+            $studentClassIds = DB::table('school_class_students')
+                ->where('student_id', $student->id)
+                ->pluck('school_class_id');
+
+            $courseIds = DB::table('course_school_classes')
+                ->whereIn('school_class_id', $studentClassIds)
+                ->pluck('course_id');
+
+            $assignments = Assignment::whereIn('course_id', $courseIds)
+                ->with([
+                    'results' => fn($query) => $query->where('student_id', $student->id),
+                    'course.schoolClasses'
+                ])
+                ->orderBy('created_at', 'desc')
+                ->get()
+                ->map(function ($assignment) {
+                    return [
+                        'id' => $assignment->id,
+                        'title' => $assignment->title,
+                        'description' => $assignment->description,
+                        'slug' => $assignment->slug,
+                        'created_date' => Carbon::parse($assignment->created_at)->toDateString(),
+                        'created_at' => $assignment->created_at->format('Y-m-d H:i:s'),
+                        'has_submitted' => $assignment->results->isNotEmpty(),
+                        'total_score' => $assignment->results->first()->total_score ?? null,
+                        'status' => $assignment->results->first()->status ?? 'not attempted',
+                        'course_name' => $assignment->course->name,
+                        'course_slug' => $assignment->course->slug,
+                        'class_name' => $assignment->schoolClass->name
+                    ];
+                });
+
+            return response()->json([
+                'role' => 'student',
+                'data' => $assignments
+            ]);
+        } elseif ($user->role === 'teacher') {
+            $teacher = Teacher::where('user_id', $user->id)->first();
+            if (!$teacher) {
+                return response()->json(['error' => 'User tidak ditemukan sebagai teacher.'], 403);
+            }
+
+            // Ambil semua courses yang dimiliki guru ini
+            $courses = Course::with(['assignments', 'schoolClasses'])
+                ->where('teacher_id', $teacher->id)
+                ->get();
+
+            // Format response per class
+            $grouped = [];
+
+            foreach ($courses as $course) {
+                foreach ($course->schoolClasses as $class) {
+                    $className = $class->name;
+
+                    if (!isset($grouped[$className])) {
+                        $grouped[$className] = [];
+                    }
+
+                    foreach ($course->assignments as $assignment) {
+                        $grouped[$className][] = [
+                            'id' => $assignment->id,
+                            'title' => $assignment->title,
+                            'description' => $assignment->description,
+                            'slug' => $assignment->slug,
+                            'created_at' => $assignment->created_at->format('Y-m-d H:i:s'),
+                            'course_name' => $course->name,
+                            'course_slug' => $course->slug,
+                        ];
+                    }
+                }
+            }
+
+            $formatted = collect($grouped)->map(function ($assignments, $className) {
                 return [
-                    'id' => $assignment->id,
-                    'title' => $assignment->title,
-                    'description' => $assignment->description,
-                    'slug' => $assignment->slug,
-                    'created_at' => date_format($assignment->created_at, 'Y-m-d'),
-                    'has_submitted' => $assignment->results->isNotEmpty(), // Cek apakah student sudah mengerjakan
-                    'total_score' => $assignment->results->isNotEmpty() ? $assignment->results->first()->total_score : null,
-                    'status' => $assignment->results->isNotEmpty() ? $assignment->results->first()->status : 'not attemped',
-                    'course_name' => $assignment->course->name,
-                    'course_slug' => $assignment->course->slug,
+                    'class_name' => $className,
+                    'assignments' => $assignments
                 ];
-            })
-        ]);
+            })->values();
+
+            return response()->json([
+                'role' => 'teacher',
+                'data' => $formatted
+            ]);
+        }
+        return response()->json(['error' => 'Role tidak dikenali.'], 403);
     }
     public function getAssignmentsByCourse(Course $course)
     {
@@ -69,19 +136,20 @@ class AssignmentController extends Controller
             $result = $classes->map(function ($class) use ($course) {
                 return [
                     'class_name' => $class->name,
-                    'assignments' => $course->assignments->map(function ($assignment) {
-                        return [
-                            'id' => $assignment->id,
-                            'title' => $assignment->title,
-                            'description' => $assignment->description,
-                            'slug' => $assignment->slug,
-                            'corrected' => $assignment->corrected,
-                            'created_at' => $assignment->created_at->format('Y-m-d'),
-                        ];
-                    }),
+                    'assignments' => $course->assignments
+                        ->sortByDesc('created_at')
+                        ->map(function ($assignment) {
+                            return [
+                                'id' => $assignment->id,
+                                'title' => $assignment->title,
+                                'description' => $assignment->description,
+                                'slug' => $assignment->slug,
+                                'corrected' => $assignment->corrected,
+                                'created_at' => $assignment->created_at->format('Y-m-d'),
+                            ];
+                        })->values(), // pastikan indeks rapi
                 ];
             });
-
             return response()->json([
                 'course' => [
                     'name' => $course->name,
@@ -90,29 +158,30 @@ class AssignmentController extends Controller
                 'class_assignments' => $result,
             ]);
         }
-
         // Untuk student, tampilkan semua assignment dari course ini
         elseif ($user->role === 'student') {
-            $assignments = $course->assignments->map(function ($assignment) {
-                return [
-                    'id' => $assignment->id,
-                    'title' => $assignment->title,
-                    'description' => $assignment->description,
-                    'slug' => $assignment->slug,
-                    'corrected' => $assignment->corrected,
-                    'created_at' => $assignment->created_at->format('Y-m-d'),
-                    'course_name' => $assignment->course->name,
-                    'course_slug' => $assignment->course->slug,
-                ];
-            });
+            $assignments = $course->assignments
+                ->sortByDesc('created_at')
+                ->map(function ($assignment) {
+                    return [
+                        'id' => $assignment->id,
+                        'title' => $assignment->title,
+                        'description' => $assignment->description,
+                        'slug' => $assignment->slug,
+                        'corrected' => $assignment->corrected,
+                        'created_at' => $assignment->created_at->format('Y-m-d'),
+                        'course_name' => $assignment->course->name,
+                        'course_slug' => $assignment->course->slug,
+                    ];
+                })->values(); // pastikan indeks rapi
 
             return response()->json([
                 'assignments' => $assignments
             ]);
         }
-
         return response()->json(['error' => 'Unauthorized'], 403);
     }
+
 
     public function getDataCreate(Course $course)
     {
@@ -167,10 +236,11 @@ class AssignmentController extends Controller
             ]);
 
             if ($q['question_type'] === 'multiple_choice') {
+                $correctOptionText = $q['options'][$q['correct_option']] ?? null;
                 Option::create([
                     'question_id' => $question->id,
-                    'option_text' => json_encode($q['options']), // Simpan dalam bentuk array JSON
-                    'correct_option' => (string) $q['correct_option'], // Simpan jawaban yang benar
+                    'option_text' => json_encode($q['options']), // simpan array pilihan sebagai JSON
+                    'correct_option' => $correctOptionText, // Simpan jawaban yang benar
                 ]);
             } else {
                 if ($assignment->corrected === 'system') {
@@ -234,7 +304,7 @@ class AssignmentController extends Controller
                 return response()->json(['error' => 'User tidak ditemukan sebagai student.'], 403);
             }
             $studentId = $student->id;
-            $answers = $request->answers;
+            $answers = array_values($request->input('answers'));;
             $totalScore = 0;
             $totalPossibleScore = 0;
             $points = [];
@@ -244,9 +314,8 @@ class AssignmentController extends Controller
                 'assignment_id' => $assignment->id,
                 'student_answer' => json_encode($answers), // Simpan jawaban siswa dalam JSON
             ]);
-            // Ambil semua pertanyaan terkait assignment
             $questions = Question::where('assignment_id', $assignment->id)->with('options')->get();
-            // Koreksi jawaban jika dikoreksi oleh sistem
+
             if ($assignment->corrected === 'system') {
                 foreach ($questions as $index => $question) {
                     $totalPossibleScore += $question->point;
@@ -254,12 +323,12 @@ class AssignmentController extends Controller
                     $pointEarned = 0;
 
                     if ($userAnswer !== null) {
-                        if ($question->question_type === 'multiple_choice' && optional($question->options)->correct_option === $userAnswer) {
-                            // $totalScore += $question->point;
+                        $correctAnswerText = optional($question->options->first())->correct_option;
+
+                        if ($question->question_type === 'multiple_choice' && $correctAnswerText === $userAnswer) {
                             $pointEarned = $question->point;
-                        } elseif ($question->question_type === 'essay' && optional($question->options)->correct_option !== null) {
-                            if (strtolower($question->options->correct_option) === strtolower($userAnswer)) {
-                                // $totalScore += $question->point;
+                        } elseif ($question->question_type === 'essay' && $correctAnswerText !== null) {
+                            if (strtolower($correctAnswerText) === strtolower($userAnswer)) {
                                 $pointEarned = $question->point;
                             }
                         }
@@ -269,24 +338,27 @@ class AssignmentController extends Controller
                 }
                 $status = 'completed';
             } else {
+                $hasEssay = false;
                 foreach ($questions as $index => $question) {
                     $totalPossibleScore += $question->point;
                     $userAnswer = $answers[$index] ?? null;
                     $pointEarned = 0;
 
                     if ($userAnswer !== null) {
-                        if ($question->question_type === 'multiple_choice' && optional($question->options)->correct_option === $userAnswer) {
-                            // $totalScore += $question->point;
-                            $pointEarned = $question->point;
+                        if ($question->question_type === 'multiple_choice') {
+                            $correctAnswerText = optional($question->options->first())->correct_option;
+                            if ($correctAnswerText !== null && trim(strtolower($userAnswer)) === trim(strtolower($correctAnswerText))) {
+                                $pointEarned = $question->point;
+                            }
                         } elseif ($question->question_type === 'essay') {
-                            $totalScore += 0; // Nilai diset 0 untuk dikoreksi oleh guru
-                            $pointEarned = 0;
+                            $hasEssay = true;
+                            $pointEarned = 0; // nilai diset 0 dulu, nanti dikoreksi guru
                         }
                     }
                     $totalScore += $pointEarned;
                     $points[] = $pointEarned;
                 }
-                $status = 'pending';
+                $status = $hasEssay ? 'pending' : 'completed';
             }
             Result::create([
                 'student_id' => $studentId,
@@ -307,6 +379,97 @@ class AssignmentController extends Controller
             return response()->json(['error' => 'Terjadi kesalahan saat menyimpan jawaban.', 'details' => $e->getMessage()], 500);
         }
     }
+
+    public function viewAnswers(Assignment $assignment)
+    {
+        $assignment->load('schoolClass.students');
+        $students = $assignment->schoolClass->students;
+
+        $results = Result::where('assignment_id', $assignment->id)
+            ->get()
+            ->keyBy('student_id');
+
+        // Gabungkan data siswa dan hasil pengerjaan
+        $data = $students->map(function ($student) use ($results) {
+            $result = $results->get($student->id);
+
+            return [
+                'nis' => $student->nis,
+                'student_name' => $student->user->name,
+                'status' => $result->status ?? 'not_submitted',
+                'total_score' => $result->total_score ?? null,
+            ];
+        });
+
+        return response()->json([
+            'assignment' => [
+                'title' => $assignment->title,
+                'slug' => $assignment->slug,
+            ],
+            'students' => $data,
+        ]);
+    }
+
+    public function viewStudentAnswers(Request $request, Assignment $assignment, $nis)
+    {
+        try {
+            $student = Student::where('nis', $nis)->firstOrFail();
+            $answer = Answer::where('student_id', $student->id)
+                ->where('assignment_id', $assignment->id)
+                ->first();
+
+            if (!$answer) {
+                return response()->json(['error' => 'Jawaban siswa tidak ditemukan.'], 404);
+            }
+
+            $result = Result::where('student_id', $student->id)
+                ->where('assignment_id', $assignment->id)
+                ->first();
+
+            $studentAnswers = json_decode($answer->student_answer, true);
+            $points = $result ? json_decode($result->points, true) : [];
+
+            $assignment->load(['questions.options']);
+
+            $data = [
+                'assignment' => [
+                    'id' => $assignment->id,
+                    'title' => $assignment->title,
+                    'description' => $assignment->description,
+                    'corrected' => $assignment->corrected,
+                    'questions' => $assignment->questions->map(function ($question, $index) use ($studentAnswers, $points) {
+                        return [
+                            'id' => $question->id,
+                            'question_text' => $question->question_text,
+                            'question_type' => $question->question_type,
+                            'options' => $question->options->isNotEmpty()
+                                ? json_decode($question->options->first()->option_text, true)
+                                : [],
+                            'correct_option' => $question->question_type === 'multiple_choice'
+                                ? optional($question->options->first())->correct_option
+                                : null,
+                            'student_answer' => $studentAnswers[$index] ?? null,
+                            'point' => $question->point,
+                            'earned_point' => $points[$index] ?? null,
+                        ];
+                    }),
+                ],
+                'student' => [
+                    'id' => $student->id,
+                    'name' => $student->user->name,
+                    'nis' => $student->nis,
+                ]
+            ];
+
+            return response()->json($data, 200);
+        } catch (\Exception $e) {
+            return response()->json([
+                'message' => 'Gagal mengambil data jawaban siswa.',
+                'error' => $e->getMessage()
+            ], 500);
+        }
+    }
+
     public function gradeAssignment(Request $request, Assignment $assignment, Answer $answer)
     {
         DB::beginTransaction();
@@ -345,6 +508,25 @@ class AssignmentController extends Controller
             DB::rollback();
             return response()->json(['error' => 'Terjadi kesalahan saat mengoreksi jawaban.', 'details' => $e->getMessage()], 500);
         }
+    }
+
+    public function viewSubmited(Assignment $assignment)
+    {
+        $student = Student::where('user_id', Auth::id())->first();
+
+        $result = Result::where('assignment_id', $assignment->id)
+            ->where('student_id', $student->id)
+            ->first();
+
+        if (!$result) {
+            return response()->json(['message' => 'Belum mengumpulkan tugas ini'], 404);
+        }
+
+        return response()->json([
+            'submitted' => true,
+            'total_score' => $result->total_score,
+            'status' => $result->status
+        ]);
     }
 
     public function viewUserResult(Assignment $assignment)
