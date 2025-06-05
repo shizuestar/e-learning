@@ -267,6 +267,7 @@ class SchoolClassController extends Controller
                     return [
                         'id' => $course->id,
                         'name' => $course->name,
+                        "teacherName" => $course->teacher ? $course->teacher->user->name : null,
                     ];
                 }),
             ];

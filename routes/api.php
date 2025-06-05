@@ -60,7 +60,7 @@ Route::middleware('auth:sanctum')->group(function () {
 
     Route::get('/assignment/{assignment:slug}/viewAnswers', [AssignmentController::class, 'viewAnswers']);
     Route::get('/assignment/{assignment:slug}/viewStudentAnswer/{nis}', [AssignmentController::class, 'viewStudentAnswers']);
-    Route::put('/assignment/{assignment:slug}/response/{answer}', [AssignmentController::class, 'gradeAssignment']);
+    Route::post('/assignment/{assignment:slug}/gradeAssignment/{nis}', [AssignmentController::class, 'gradeAssignment']);
 
     // Student routes
     Route::get('/courses/assignment/{slug}', [AssignmentController::class, 'showQuestions']);

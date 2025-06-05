@@ -17,7 +17,8 @@ return new class extends Migration
             $table->foreignId('assignment_id')->constrained('assignments')->onDelete('cascade');
             $table->json('points');
             $table->integer('total_score');
-            $table->enum('status', ['pending', 'completed']);
+            $table->enum('status', ['pending','cheating' ,'completed']);
+            $table->string('detail')->nullable();
             $table->timestamps();
         });
     }

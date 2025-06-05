@@ -6,7 +6,7 @@ use Illuminate\Database\Eloquent\Model;
 
 class Result extends Model
 {
-    protected $fillable = ['student_id', 'assignment_id', 'total_score', 'points'];
+    protected $fillable = ['student_id', 'assignment_id', 'total_score', 'points', 'status', 'detail'];
 
     public function student() {
         return $this->belongsTo(Student::class);
